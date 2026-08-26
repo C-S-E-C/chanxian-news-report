@@ -8,16 +8,13 @@
  * 本垫片包装 window.fetch：
  *   · 非 g4f.space/cake/* 的请求一律原样放行；
  *   · 目标请求先按原样直连（服务器修好后自动回到最优路径）；
- *   · 直连抛 TypeError（被 CORS 拦截/网络失败）且是 GET 时，
- *     依次改走公共 CORS 中继重试一次，全部失败才抛原始错误。
+ *   · 直连被拦/网络失败且是 GET 时，改走唯一自建中继
+ *     （url-proxy.syntropica.top）重试一次，仍失败才抛原始错误。
  * 仅做透明兜底，不改变任何业务语义。
  * ============================================================ */
 (function () {
   var TARGET = /^https:\/\/g4f\.space\/cake\//i;
-  /* 中继列表：依次尝试，均返回带 Access-Control-Allow-Origin:* 的响应 */
-  var RELAYS = [
-    function (u) { return 'https://url-proxy.syntropica.top/?url=' + encodeURIComponent(u); }
-  ];
+  var RELAY = 'https://url-proxy.syntropica.top/?url=';   /* 唯一中继 */
   var _fetch = window.fetch ? window.fetch.bind(window) : null;
   if (!_fetch) return;
 
@@ -31,18 +28,12 @@
 
     return _fetch.apply(null, arguments).then(
       function (res) { return res; },               /* 直连成功：原样返回 */
-      function (err) {                              /* 直连失败：仅对 GET 做中继兜底 */
+      function (err) {                              /* 直连失败：仅对 GET 走中继兜底一次 */
         if (method !== 'GET') throw err;
-        return relay(url, 0).catch(function () { throw err; });
+        console.info('[G4F-CORS-shim] 直连失败，改走中继:', url);
+        return _fetch(RELAY + encodeURIComponent(url), { cache: 'no-store' })
+          .catch(function () { throw err; });
       }
     );
   };
-
-  function relay(url, i) {
-    if (i >= RELAYS.length) return Promise.reject(new Error('relay exhausted'));
-    console.info('[G4F-CORS-shim] 直连失败，改走中继 (' + (i + 1) + '/' + RELAYS.length + '):', url);
-    return _fetch(RELAYS[i](url), { cache: 'no-store' }).catch(function (e) {
-      return relay(url, i + 1);
-    });
-  }
 })();
