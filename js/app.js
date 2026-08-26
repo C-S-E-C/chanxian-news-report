@@ -303,14 +303,33 @@ function TTSLoader() {
   if (typeof synth.onvoiceschanged !== 'undefined') { synth.onvoiceschanged = loadVoices; }
 }
 
-/* G4F cake-baker 模块为异步加载，未就绪时不报错 */
+/* G4F cake-baker 模块为异步加载，未就绪时不报错。
+ * g4f.space 接口限流（HTTP 429）时 start() 会反复失败：
+ * 若仍每 5 秒重启一次只会把限流打得更死，因此做指数退避（5s 起、上限 10 分钟）；
+ * 一旦观察到它成功运行过，就恢复基础节奏。 */
 function g4fReady() { return typeof window.G4FCakeBaker !== 'undefined'; }
-if (g4fReady() && !G4FCakeBaker.status().running) G4FCakeBaker.start()
-setInterval(()=>{
+var G4F_BASE_DELAY = 5000, G4F_MAX_DELAY = 600000;
+var g4fDelay = G4F_BASE_DELAY, g4fLastStart = 0, g4fSawRunning = false;
+function g4fStart() { try { G4FCakeBaker.start(); } catch (e) { /* 模块内部异常不阻塞页面 */ } }
+if (g4fReady()) { g4fStart(); g4fLastStart = Date.now(); }
+setInterval(() => {
   if (!g4fReady()) return;
-  if (!G4FCakeBaker.status().running) G4FCakeBaker.start()
-  if (document.getElementById('credits')) {
-    document.getElementById('credits').innerText = "Credits: "+G4FCakeBaker.status().total.credits.toString();
-    if (document.getElementById('credits').style.display == 'none') document.getElementById('credits').style.display = 'block';
+  var st = null;
+  try { st = G4FCakeBaker.status(); } catch (e) { return; }
+  if (!st) return;
+  var now = Date.now();
+  if (st.running) {
+    g4fSawRunning = true;   /* 正常烘焙中，无需干预 */
+  } else if (now - g4fLastStart >= g4fDelay) {
+    /* 空闲且已到重试间隔：上次启动后从未跑起来过 → 判定为失败，退避加倍 */
+    g4fDelay = (g4fLastStart && !g4fSawRunning) ? Math.min(g4fDelay * 2, G4F_MAX_DELAY) : G4F_BASE_DELAY;
+    g4fSawRunning = false;
+    g4fLastStart = now;
+    g4fStart();
+  }
+  var creditsEl = document.getElementById('credits');
+  if (creditsEl && st.total && typeof st.total.credits !== 'undefined') {
+    creditsEl.innerText = "Credits: " + st.total.credits.toString();
+    if (creditsEl.style.display == 'none') creditsEl.style.display = 'block';
   }
 }, 5000);
