@@ -193,8 +193,16 @@ function bindReportActions() {
     shareBtn.addEventListener('click', function () {
       var data = window.__CURRENT_REPORT__ || {};
       var date = window.__CURRENT_REPORT_DATE__ || '';
-      var payload = btoa(encodeURIComponent(JSON.stringify({ data: data, date: date })));
-      location.href = 'share.html?data=' + payload;
+      var raw = JSON.stringify({ data: data, date: date });
+      try {
+        var id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+        localStorage.setItem('chanxian-share:' + id, raw);
+        location.href = 'share.html?s=' + encodeURIComponent(id);
+      } catch (e) {
+        /* localStorage 不可用时保留旧版长链接兜底 */
+        var payload = btoa(encodeURIComponent(raw));
+        location.href = 'share.html?data=' + payload;
+      }
     });
   }
   if (window.__CREDIT_WARNING__) applyCreditWarning(window.__CREDIT_WARNING__);
