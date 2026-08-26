@@ -12,7 +12,7 @@
  *   只静默输出，绝不改动任何计算逻辑；任何一步失败都回退原生行为。
  * ============================================================ */
 (function () {
-  var QUIET = /\[G4FCakeBaker\]\s*hashing/;
+  var QUIET = /\[G4FCakeBaker\]\s*(hashing|hash found)/;
 
   /* ---- 1) 主线程 console 过滤（不动 warn/error） ---- */
   ['log', 'info', 'debug'].forEach(function (m) {
@@ -31,7 +31,7 @@
   if (typeof NativeWorker !== 'function') return;
 
   var GUARD =
-    '(function(){var q=/\\[G4FCakeBaker\\]\\s*hashing/;' +
+    '(function(){var q=/\\[G4FCakeBaker\\]\\s*(hashing|hash found)/;' +
     "['log','info','debug'].forEach(function(m){var o=console[m];" +
     'if(typeof o!=="function")return;' +
     'console[m]=function(){for(var i=0;i<arguments.length;i++){' +
