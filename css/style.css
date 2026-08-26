@@ -44,3 +44,4 @@ ol.watch{list-style:none;counter-reset:w}
 ol.watch li{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:10px;counter-increment:w;display:flex;gap:12px}
 ol.watch li::before{content:counter(w);flex:0 0 26px;height:26px;background:var(--accent);color:#04121f;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px}
 ol.watch p{flex:1}
+#g4f-cake-panel{display:none}
