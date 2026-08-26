@@ -342,7 +342,14 @@ async function boot() {
   currentReport = Object.assign({}, DEFAULT_DATA);
   window.render(currentReport, fmtDateCN(new Date()));
   // 让 AI 接手，实时逐块填充真实内容；只有最终 done 后才写入 IndexedDB
-  runEditorAgent().catch(e => console.warn('[Analyser] AI 编辑中断（未完成内容不写入 IndexedDB）：', e));
+  runEditorAgent().catch(e => {
+    const msg = String(e && e.message || e);
+    const m = msg.match(/Status 402:[\s\S]*/i);
+    if (m && window.showCreditWarning) {
+      window.showCreditWarning('⚠ Credit 402：Cake credit budget exceeded', m[0]);
+    }
+    console.warn('[Analyser] AI 编辑中断（未完成内容不写入 IndexedDB）：', e);
+  });
   return { source: 'default+ai', date: key };
 }
 

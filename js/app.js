@@ -197,7 +197,21 @@ function bindReportActions() {
       location.href = 'share.html?data=' + payload;
     });
   }
+  if (window.__CREDIT_WARNING__) applyCreditWarning(window.__CREDIT_WARNING__);
 }
+
+function applyCreditWarning(w) {
+  var creditsEl = document.getElementById('credits');
+  if (!creditsEl || !w) return;
+  creditsEl.innerText = w.text;
+  creditsEl.title = w.title || w.text;
+  creditsEl.classList.add('warn');
+  creditsEl.style.display = 'block';
+}
+window.showCreditWarning = function (text, title) {
+  window.__CREDIT_WARNING__ = { text: text, title: title || text };
+  applyCreditWarning(window.__CREDIT_WARNING__);
+};
 
 /* ---------- 三、TTS 朗读（渲染完成后绑定） ---------- */
 function TTSLoader() {
@@ -358,7 +372,11 @@ setInterval(() => {
     g4fStart();
   }
   var creditsEl = document.getElementById('credits');
-  if (creditsEl && st.total && typeof st.total.credits !== 'undefined') {
+  if (creditsEl && window.__CREDIT_WARNING__) {
+    applyCreditWarning(window.__CREDIT_WARNING__);
+  } else if (creditsEl && st.total && typeof st.total.credits !== 'undefined') {
+    creditsEl.classList.remove('warn');
+    creditsEl.title = '';
     creditsEl.innerText = "Credits: " + st.total.credits.toString();
     if (creditsEl.style.display == 'none') creditsEl.style.display = 'block';
   }
