@@ -175,6 +175,21 @@ function render(DATA,date) {
 
 window.render = render;
 
+async function encodeSharePayload(raw) {
+  if (!('CompressionStream' in window)) throw new Error('CompressionStream unavailable');
+  var bytes = new TextEncoder().encode(raw);
+  var stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'));
+  var packed = new Uint8Array(await new Response(stream).arrayBuffer());
+  return bytesToBase64Url(packed);
+}
+function bytesToBase64Url(bytes) {
+  var out = '';
+  for (var i = 0; i < bytes.length; i += 0x8000) {
+    out += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(out).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
 function bindReportActions() {
   var refreshBtn = document.getElementById('btnRefresh');
   if (refreshBtn) {
@@ -190,18 +205,17 @@ function bindReportActions() {
   }
   var shareBtn = document.getElementById('btnShare');
   if (shareBtn) {
-    shareBtn.addEventListener('click', function () {
+    shareBtn.addEventListener('click', async function () {
       var data = window.__CURRENT_REPORT__ || {};
       var date = window.__CURRENT_REPORT_DATE__ || '';
       var raw = JSON.stringify({ data: data, date: date });
       try {
-        var id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-        localStorage.setItem('chanxian-share:' + id, raw);
-        location.href = 'share.html?s=' + encodeURIComponent(id);
+        var payload = await encodeSharePayload(raw);
+        location.href = 'share.html?z=' + payload;
       } catch (e) {
-        /* localStorage 不可用时保留旧版长链接兜底 */
-        var payload = btoa(encodeURIComponent(raw));
-        location.href = 'share.html?data=' + payload;
+        /* 压缩 API 不可用时保留旧版长链接兜底 */
+        var legacy = btoa(encodeURIComponent(raw));
+        location.href = 'share.html?data=' + legacy;
       }
     });
   }
