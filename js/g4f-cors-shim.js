@@ -3,13 +3,17 @@
  *
  * 现状：g4f.space 对 https://c-s-e-c.github.io 的跨域请求返回
  *   Access-Control-Allow-Origin: null
- * 这是对方服务器的配置错误，浏览器会直接丢弃响应（哪怕状态码是 200）。
+ * 这是对方服务器的配置错误：
+ *   · GET（如 /cake/issue）响应被浏览器直接丢弃；
+ *   · POST（如 /cake/bake）的 OPTIONS 预检同样被拒。
+ * 唯一自建中继 url-proxy.syntropica.top 会补上 Access-Control-Allow-Origin:*。
  *
  * 本垫片包装 window.fetch：
  *   · 非 g4f.space/cake/* 的请求一律原样放行；
- *   · 目标请求先按原样直连（服务器修好后自动回到最优路径）；
- *   · 直连被拦/网络失败且是 GET 时，改走唯一自建中继
- *     （url-proxy.syntropica.top）重试一次，仍失败才抛原始错误。
+ *   · GET：先按原样直连（g4f.space 修好后自动回到最优路径），
+ *     被拦/失败时改走中继重试一次；
+ *   · 非 GET：预检在 g4f.space 处必然失败，直接经中继转发
+ *     方法/头/体（要求中继支持方法与请求体透传及 OPTIONS 预检）。
  * 仅做透明兜底，不改变任何业务语义。
  * ============================================================ */
 (function () {
@@ -18,22 +22,34 @@
   var _fetch = window.fetch ? window.fetch.bind(window) : null;
   if (!_fetch) return;
 
+  function viaRelay(url, init) {
+    var o = init || {};
+    o.cache = 'no-store';
+    return _fetch(RELAY + encodeURIComponent(url), o);
+  }
+
   window.fetch = function (input, init) {
-    var url = '';
-    try { url = typeof input === 'string' ? input : (input && input.url) || ''; } catch (e) { }
+    var url = '', req = null;
+    try { if (input && typeof input !== 'string') { req = input; url = input.url || ''; } else { url = input || ''; } } catch (e) { }
     if (!TARGET.test(url)) return _fetch.apply(null, arguments);
 
-    var method = 'GET';
-    try { method = ((init && init.method) || (input && input.method) || 'GET').toUpperCase(); } catch (e) { }
+    var method = 'GET', headers = null, body;
+    try {
+      method = String((init && init.method) || (req && req.method) || 'GET').toUpperCase();
+      headers = (init && init.headers) || (req && req.headers) || null;
+      if (init && 'body' in init) body = init.body;
+      else if (req && req.body) body = req.body;
+    } catch (e) { }
 
-    return _fetch.apply(null, arguments).then(
-      function (res) { return res; },               /* 直连成功：原样返回 */
-      function (err) {                              /* 直连失败：仅对 GET 走中继兜底一次 */
-        if (method !== 'GET') throw err;
-        console.info('[G4F-CORS-shim] 直连失败，改走中继:', url);
-        return _fetch(RELAY + encodeURIComponent(url), { cache: 'no-store' })
-          .catch(function () { throw err; });
-      }
-    );
+    /* GET：直连优先，失败才走中继 */
+    if (method === 'GET') {
+      return _fetch.apply(null, arguments).catch(function (err) {
+        console.info('[G4F-CORS-shim] GET 直连失败，改走中继:', url);
+        return viaRelay(url, { headers: headers }).catch(function () { throw err; });
+      });
+    }
+    /* 非 GET：预检必被 g4f.space 拒绝，直接经中继透传方法/头/体 */
+    console.info('[G4F-CORS-shim]', method, '改走中继:', url);
+    return viaRelay(url, { method: method, headers: headers, body: body });
   };
 })();
