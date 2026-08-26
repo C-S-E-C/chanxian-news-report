@@ -16,8 +16,6 @@
   var TARGET = /^https:\/\/g4f\.space\/cake\//i;
   /* 中继列表：依次尝试，均返回带 Access-Control-Allow-Origin:* 的响应 */
   var RELAYS = [
-    function (u) { return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u); },
-    function (u) { return 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u); },
     function (u) { return 'https://url-proxy.syntropica.top/?url=' + encodeURIComponent(u); }
   ];
   var _fetch = window.fetch ? window.fetch.bind(window) : null;
