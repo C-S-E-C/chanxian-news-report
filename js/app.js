@@ -80,6 +80,12 @@ function chartSVG(c) {
 
 /* ---------- 二、极简渲染区：一个函数把数据填进模板 ---------- */
 function _render(d,date) {
+  /* 区块条件渲染：AI 未提交的区块（含标题）不输出；编号按实际显示顺序动态生成 */
+  let sec = 0;
+  const CN = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+  const cnNum = n => n <= 10 ? (n === 10 ? '十' : CN[n]) : (n < 20 ? '十' + CN[n - 10] : CN[Math.floor(n / 10)] + '十' + (n % 10 ? CN[n % 10] : ''));
+  const h2 = t => `<h2>${cnNum(++sec)}、${t}</h2>`;
+  const has = a => Array.isArray(a) && a.length > 0;
   return `
 <header>
 <div class="kicker">PROPERTY & CASUALTY DAILY BRIEF</div>
@@ -108,14 +114,16 @@ function _render(d,date) {
 <span id="status">加载中…</span>
 </div>
 
+${(has(d.kpis) || d.intro) ? `
 <section>
-<div class="kpis">${d.kpis.map(k =>
+${has(d.kpis) ? `<div class="kpis">${d.kpis.map(k =>
 `<div class="kpi"><div class="v${k.cls ? ' ' + k.cls : ''}">${k.v}${k.unit ? `<span style="font-size:14px">${k.unit}</span>` : ''}</div><div class="t">${k.t}</div></div>`).join('')}
-</div>
-<div class="note" data-tts>${d.intro}</div>
-</section>
+</div>` : ''}
+${d.intro ? `<div class="note" data-tts>${d.intro}</div>` : ''}
+</section>` : ''}
 
-<h2>一、行业数据速览</h2>
+${has(d.charts) ? `
+${h2('行业数据速览')}
 <p data-tts>${d.dataLead}</p>
 ${d.charts.map(c =>
 `<div class="chartbox">
@@ -123,30 +131,32 @@ ${d.charts.map(c =>
 <div class="cap">${c.cap}</div>
 ${chartSVG(c)}
 ${c.after ? `<p data-tts>${c.after}</p>` : ''}
-</div>`).join('')}
+</div>`).join('')}` : ''}
 
-<h2>二、头部公司动态</h2>
+${has(d.companies) ? `
+${h2('头部公司动态')}
 ${d.companies.map(c =>
-`<div class="card" data-tts><div class="news-title">${c.title}</div><p>${c.text}</p></div>`).join('')}
+`<div class="card" data-tts><div class="news-title">${c.title}</div><p>${c.text}</p></div>`).join('')}` : ''}
 
-<h2>三、今日要闻</h2>
+${has(d.news) ? `
+${h2('今日要闻')}
 ${d.news.map(n =>
 `<div class="card" style="border-left:3px solid var(${n.color})">
 <div><span class="chip ${n.chip}">${n.tag}</span></div>
 <div data-tts><div class="news-title">${n.title}</div><p>${n.text}</p></div>
 <div class="src">${n.src}</div>
-</div>`).join('')}
+</div>`).join('')}` : ''}
 
-<h2>四、今日关注与风险提示</h2>
+${has(d.watch) ? `
+${h2('今日关注与风险提示')}
 <ol class="watch">
 ${d.watch.map(w => `<li><p data-tts>${w}</p></li>`).join('\n')}
-</ol>
-<br>
+</ol>` : ''}
 
-<div class="note" data-tts>${d.ending}</div>
+${d.ending ? `<div class="note" data-tts>${d.ending}</div>` : ''}
 
 <footer>
-<strong>数据来源：</strong>${d.sources}<br>
+<strong>数据来源：</strong>${d.sources || ''}<br>
 <strong>说明：</strong>${d.note}
 </footer>`;
 }
@@ -293,8 +303,11 @@ function TTSLoader() {
   if (typeof synth.onvoiceschanged !== 'undefined') { synth.onvoiceschanged = loadVoices; }
 }
 
-if (!G4FCakeBaker.status().running) G4FCakeBaker.start()
+/* G4F cake-baker 模块为异步加载，未就绪时不报错 */
+function g4fReady() { return typeof window.G4FCakeBaker !== 'undefined'; }
+if (g4fReady() && !G4FCakeBaker.status().running) G4FCakeBaker.start()
 setInterval(()=>{
+  if (!g4fReady()) return;
   if (!G4FCakeBaker.status().running) G4FCakeBaker.start()
   if (document.getElementById('credits')) {
     document.getElementById('credits').innerText = "Credits: "+G4FCakeBaker.status().total.credits.toString();
