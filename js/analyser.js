@@ -1,7 +1,8 @@
-import Client from 'https://g4f.dev/dist/js/client.js';
-const client = new Client();
+import { createClient } from 'https://g4f.dev/dist/js/providers.js';
+
+const client = createClient('default');
 const result = await client.chat.completions.create({
-      model: 'gpt-4.1',  // Or "gpt-4o", "deepseek-v3", etc.
-      messages: [{ role: 'user', content: 'Explain quantum computing' }]
+    model: 'auto',
+    messages: [{ role: 'user', content: 'Hello!' }]
 });
 console.log(result.choices[0].message.content);
