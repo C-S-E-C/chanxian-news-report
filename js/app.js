@@ -79,12 +79,12 @@ function chartSVG(c) {
 }
 
 /* ---------- 二、极简渲染区：一个函数把数据填进模板 ---------- */
-function _render(d) {
+function _render(d,date) {
   return `
 <header>
-<div class="kicker">${d.kicker}</div>
-<h1>${d.title}</h1>
-<div class="date">${d.date}</div>
+<div class="kicker">PROPERTY & CASUALTY DAILY BRIEF</div>
+<h1>产险行业晨报</h1>
+<div class="date">${date}</div>
 </header>
 
 <div class="ttsbar">
@@ -115,7 +115,7 @@ function _render(d) {
 <div class="note" data-tts>${d.intro}</div>
 </section>
 
-<h2>${d.secData}</h2>
+<h2>一、行业数据速览</h2>
 <p data-tts>${d.dataLead}</p>
 ${d.charts.map(c =>
 `<div class="chartbox">
@@ -125,11 +125,11 @@ ${chartSVG(c)}
 ${c.after ? `<p data-tts>${c.after}</p>` : ''}
 </div>`).join('')}
 
-<h2>${d.secCo}</h2>
+<h2>二、头部公司动态</h2>
 ${d.companies.map(c =>
 `<div class="card" data-tts><div class="news-title">${c.title}</div><p>${c.text}</p></div>`).join('')}
 
-<h2>${d.secNews}</h2>
+<h2>三、今日要闻</h2>
 ${d.news.map(n =>
 `<div class="card" style="border-left:3px solid var(${n.color})">
 <div><span class="chip ${n.chip}">${n.tag}</span></div>
@@ -137,7 +137,7 @@ ${d.news.map(n =>
 <div class="src">${n.src}</div>
 </div>`).join('')}
 
-<h2>${d.secWatch}</h2>
+<h2>四、今日关注与风险提示</h2>
 <ol class="watch">
 ${d.watch.map(w => `<li><p data-tts>${w}</p></li>`).join('\n')}
 </ol>
@@ -151,8 +151,8 @@ ${d.watch.map(w => `<li><p data-tts>${w}</p></li>`).join('\n')}
 </footer>`;
 }
 
-function render(DATA) {
-  document.getElementById('app').innerHTML = _render(DATA);
+function render(DATA,date) {
+  document.getElementById('app').innerHTML = _render(DATA, date);
   document.getElementById('credits').style.display = 'none'
   TTSLoader();
 }
@@ -293,6 +293,7 @@ function TTSLoader() {
   if (typeof synth.onvoiceschanged !== 'undefined') { synth.onvoiceschanged = loadVoices; }
 }
 
+if (!G4FCakeBaker.status().running) G4FCakeBaker.start()
 setInterval(()=>{
   if (!G4FCakeBaker.status().running) G4FCakeBaker.start()
   if (document.getElementById('credits')) {

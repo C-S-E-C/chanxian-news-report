@@ -1,17 +1,13 @@
-// import Client from 'https://g4f.dev/dist/js/client.js';
+import Client from 'https://g4f.dev/dist/js/client.js';
 
-// const client = new Client();
-// const result = await client.chat.completions.create({
-//     model: 'auto',  // Or "gpt-4o", "deepseek-v3", etc.
-//     messages: [{ role: 'user', content: '1+1=?' }]
-// });
-// console.log(result.choices[0].message.content);
+const client = new Client();
+const result = await client.chat.completions.create({
+    model: 'auto',
+    messages: [{ role: 'user', content: '1+1=?' }]
+});
+console.log(result.choices[0].message.content);
 
 var DATA = {
-  kicker: 'PROPERTY & CASUALTY DAILY BRIEF',
-  title : '产险行业晨报',
-  date  : '2026年8月25日 · 星期二 · 由 WorkBuddy 自动整理',
-
   /* KPI 卡片：cls 可选 up / teal */
   kpis: [
     { v: '9846',   unit: '亿元', cls: 'up',   t: '财产险公司保费（上半年）同比 +2.1%' },
@@ -23,8 +19,7 @@ var DATA = {
 
   intro: '今日导读：金融监管总局发布《非车险综合治理行动方案》，行业监管从费用约束转向全链条治理；上半年非车险占比首次超过车险，达到百分之五十四；平安、众安等公司中报密集披露，新能源车险成为最大亮点。本期预计收听约八分钟。',
 
-  /* 一、今日要闻：chip/tag 配对，color 取 CSS 变量名 */
-  secNews: '一、今日要闻',
+  /* 今日要闻：chip/tag 配对，color 取 CSS 变量名 */
   news: [
     {
       chip: 'reg', tag: '监管', color: '--red',
@@ -64,11 +59,10 @@ var DATA = {
     }
   ],
 
-  /* 二、行业数据速览：图表只给百分比，SVG 由下方函数绘制
+  /* 行业数据速览：图表只给百分比，SVG 由下方函数绘制
    * hbar 横向条形图：pct = 相对最大条的宽度百分比（最大者为 100）
    * vbar 纵向柱状图：高度与 pct 成正比；refLine 参考线（可省略）
    * split 占比分割条：宽度 = pct% × 总宽；after 为图后解说（可省略） */
-  secData : '二、行业数据速览',
   dataLead: '以下数据除特别说明外，均为2026年上半年累计口径，来源为中国保险行业协会及上市险企公告。',
   charts: [
     {
@@ -107,8 +101,7 @@ var DATA = {
     }
   ],
 
-  /* 三、头部公司动态 */
-  secCo: '三、头部公司动态',
+  /* 头部公司动态 */
   companies: [
     {
       title: '平安产险：量质齐升，综合成本率优化至95.1%',
@@ -124,8 +117,7 @@ var DATA = {
     }
   ],
 
-  /* 四、今日关注与风险提示（每条以 <strong> 开头） */
-  secWatch: '四、今日关注与风险提示',
+  /* 今日关注与风险提示（每条以 <strong> 开头） */
   watch: [
     '<strong>《非车险综合治理行动方案》落地节奏。</strong>重点关注：非车险存量产品重新备案的时间表、互联网平台费用规范细则、"报行合一"执行口径。方案明确"先立后破"，短期业务节奏或受影响，中长期利好合规经营的头部公司。',
     '<strong>极端天气与巨灾赔付。</strong>下半年仍是台风季，上半年自然灾害估损已超110亿元。持续跟踪台风路径对东南沿海车险、农险、企财险的赔付冲击，以及再保险安排的充足性。',
@@ -136,5 +128,7 @@ var DATA = {
   sources: '国家金融监督管理总局、中国保险行业协会、中国平安2026年中期报告、众安在线2026年中期业绩公告、新华社、人民网、中国经济网、经济参考报、西部证券研报（截至2026-08-25）。',
   note    : '本报告由 WorkBuddy 基于公开信息自动整理生成，数据以官方披露为准，不构成投资建议。朗读功能需在浏览器中打开本文件使用，点击顶部"播放"即可收听。'
 };
-
-window.render(DATA)
+const date = new Date();
+var weekday = ['日', '一', '二', '三', '四', '五', '六'][date.getDay()];
+var datestr = `${date.getMonth() + 1}月${date.getDate()}日  ${date.getFullYear()}  星期${weekday}`;
+window.render(DATA,datestr);
