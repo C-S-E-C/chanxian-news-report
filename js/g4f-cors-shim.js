@@ -10,17 +10,24 @@
  *
  * 本垫片包装 window.fetch：
  *   · 非 g4f.space/cake/* 的请求一律原样放行；
- *   · 所有方法一律先按原样直连 —— g4f.space 修好后自动回到最优路径，
- *     且直连能保证 issue/bake 来源 IP 一致（服务端按 IP 绑定签发）；
- *   · 被拦/失败时改走中继重试一次，透传方法/头/体，仍失败抛原始错误。
- * 仅做透明兜底，不改变任何业务语义。
+ *   · 首个 cake 请求先按原样直连（g4f.space 修好后自动回到最优路径）；
+ *   · 直连一旦失败：写入 sessionStorage 标记，本会话（含刷新）后续
+ *     所有 cake 请求直接走中继，透传方法/头/体，不再重复尝试直连；
+ *   · 中继也失败才抛原始错误。仅做透明兜底，不改变任何业务语义。
  * ============================================================ */
 (function () {
   var TARGET = /^https:\/\/g4f\.space\/cake\//i;
   var RELAY = 'https://url-proxy.syntropica.top/?url=';   /* 唯一中继 */
+  var FLAG = 'g4fCakeDirectFailed';                       /* 会话级标记 */
   var _fetch = window.fetch ? window.fetch.bind(window) : null;
   if (!_fetch) return;
 
+  function relayMode() {
+    try { return sessionStorage.getItem(FLAG) === '1'; } catch (e) { return false; }
+  }
+  function markRelay() {
+    try { sessionStorage.setItem(FLAG, '1'); } catch (e) { /* 隐私模式等场景忽略 */ }
+  }
   function viaRelay(url, init) {
     var o = init || {};
     o.cache = 'no-store';
@@ -40,12 +47,17 @@
       else if (req && req.body) body = req.body;
     } catch (e) { }
 
-    /* 一律直连优先；被 CORS 拦截/网络失败时才走中继兜底一次 */
+    var relayInit = method === 'GET'
+      ? { headers: headers }
+      : { method: method, headers: headers, body: body };
+
+    /* 本会话已确认直连不通：直接走中继 */
+    if (relayMode()) return viaRelay(url, relayInit);
+
+    /* 先直连；失败则记住，会话内后续直接走中继 */
     return _fetch.apply(null, arguments).catch(function (err) {
-      console.info('[G4F-CORS-shim]', method, '直连失败，改走中继:', url);
-      var relayInit = method === 'GET'
-        ? { headers: headers }
-        : { method: method, headers: headers, body: body };
+      markRelay();
+      console.info('[G4F-CORS-shim]', method, '直连失败，本会话后续直接走中继:', url);
       return viaRelay(url, relayInit).catch(function () { throw err; });
     });
   };
