@@ -65,6 +65,14 @@ async function idbPut(rec) {
     rq.onerror = () => reject(rq.error);
   });
 }
+async function idbDelete(key) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const rq = db.transaction(STORE, 'readwrite').objectStore(STORE).delete(key);
+    rq.onsuccess = () => resolve(true);
+    rq.onerror = () => reject(rq.error);
+  });
+}
 async function getList() {
   if (!headlineCache) headlineCache = await search.getNews();
   return headlineCache;
@@ -99,7 +107,7 @@ async function tViewNews(args) {
   return c;
 }
 
-/* ---------- 工具：填充到模板（实时渲染）+ 每次都备份 ---------- */
+/* ---------- 工具：填充到模板（只实时渲染；完成前不写 IndexedDB） ---------- */
 function mergeReport(data) {
   return Object.assign({}, DEFAULT_DATA, data || {});
 }
@@ -108,17 +116,26 @@ async function tFillTemplate(args) {
   currentReport = Object.assign({}, currentReport || DEFAULT_DATA, args.data || {});
   const ds = args.date || fmtDateCN(new Date());
   window.render(currentReport, ds);         // ① 实时渲染进页面
-  const rec = {
-    date: todayKey(), datestr: ds,
-    savedAt: new Date().toISOString(),
-    source: args.source || 'tool',
-    data: currentReport
-  };
-  await idbPut(rec);                        // ② 每次填充都备份一份（同一天覆盖）
   return {
-    ok: true, backedUpTo: rec.date,
+    ok: true,
+    saved: false,
+    reason: '实时渲染完成；等待 AI 回复 {"done":true} 后再写入 IndexedDB',
     counts: { kpis: currentReport.kpis.length, news: currentReport.news.length, charts: currentReport.charts.length, companies: currentReport.companies.length, watch: currentReport.watch.length }
   };
+}
+
+async function saveCompletedReport(source) {
+  if (!currentReport) return null;
+  const rec = {
+    date: todayKey(),
+    datestr: window.__CURRENT_REPORT_DATE__ || fmtDateCN(new Date()),
+    savedAt: new Date().toISOString(),
+    source: source || 'ai-complete',
+    complete: true,
+    data: currentReport
+  };
+  await idbPut(rec);
+  return rec;
 }
 
 /* ---------- 辅助工具：查看某天的备份 ---------- */
@@ -268,7 +285,16 @@ async function runEditorAgent() {
         : '（上一轮回复为空）请只输出 JSON：工具调用 {"actions":[...]} 或完成时回复 {"done":true}。' });
       continue;
     }
-    if (parsed.done) { console.log('[Analyser][AI] 报告完成，AI 下班。共 ' + round + ' 轮。'); break; }
+    if (parsed.done) {
+      try {
+        const rec = await saveCompletedReport('ai-complete');
+        if (rec) console.log('[Analyser][AI] 报告完成，已写入 IndexedDB：' + rec.date + '，共 ' + round + ' 轮。');
+      } catch (e) {
+        console.warn('[Analyser][AI] 报告完成，但 IndexedDB 写入失败：', e);
+      }
+      console.log('[Analyser][AI] 报告完成，AI 下班。共 ' + round + ' 轮。');
+      break;
+    }
     const actions = parsed.actions;
     if (!actions.length) {
       consecutiveFailures++;
@@ -301,8 +327,8 @@ async function boot() {
   const key = todayKey();
   try {
     const s = await idbGet(key);
-    // 只有真实产出（ai/tool）的快照才算命中；default 占位记录一律视为未命中
-    if (s && s.data && s.source && s.source !== 'default') {
+    // 只有已完成的快照才算命中；AI 分批生成中的半成品一律视为未命中
+    if (s && s.data && s.complete === true) {
       currentReport = s.data;
       window.render(s.data, s.datestr || fmtDateCN(new Date()));
       console.log('[Analyser] 命中 IndexedDB 当天快照（' + key + '），savedAt=' + s.savedAt + '，无需 AI。');
@@ -315,8 +341,8 @@ async function boot() {
   // 否则下次进入会命中假快照导致 AI 永远不会再运行。
   currentReport = Object.assign({}, DEFAULT_DATA);
   window.render(currentReport, fmtDateCN(new Date()));
-  // 让 AI 接手，实时逐块填充真实内容（每次 fill_template 都会备份）
-  runEditorAgent().catch(e => console.warn('[Analyser] AI 编辑中断（保留当前已填充内容）：', e));
+  // 让 AI 接手，实时逐块填充真实内容；只有最终 done 后才写入 IndexedDB
+  runEditorAgent().catch(e => console.warn('[Analyser] AI 编辑中断（未完成内容不写入 IndexedDB）：', e));
   return { source: 'default+ai', date: key };
 }
 
@@ -327,7 +353,7 @@ function err(id, code, message) { return { jsonrpc: '2.0', id, error: { code, me
 const TOOLS = [
   { name: 'get_news', description: '获取今日新闻列表（人民网，经代理）。', inputSchema: { type: 'object', properties: { keyword: { type: 'string' }, limit: { type: 'number' } } } },
   { name: 'view_news', description: '查看某个新闻正文（url 或 index 二选一）。', inputSchema: { type: 'object', properties: { url: { type: 'string' }, index: { type: 'number' } } } },
-  { name: 'fill_template', description: '把数据合并进晨报模板并实时渲染，同时备份到 IndexedDB。', inputSchema: { type: 'object', properties: { data: { type: 'object' }, date: { type: 'string' }, source: { type: 'string' } } } },
+  { name: 'fill_template', description: '把数据合并进晨报模板并实时渲染；完成前不写 IndexedDB。', inputSchema: { type: 'object', properties: { data: { type: 'object' }, date: { type: 'string' }, source: { type: 'string' } } } },
   { name: 'get_backup', description: '查看 IndexedDB 某天（默认今天）的备份。', inputSchema: { type: 'object', properties: { date: { type: 'string' } } } }
 ];
 
@@ -367,7 +393,7 @@ export const Analyser = {
       }),
   runEditorAgent,
   boot,
-  db: { get: idbGet, put: idbPut, todayKey }
+  db: { get: idbGet, put: idbPut, delete: idbDelete, clearToday: () => idbDelete(todayKey()), todayKey }
 };
 window.Analyser = Analyser;
 

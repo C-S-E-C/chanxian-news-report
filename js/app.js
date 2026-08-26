@@ -86,6 +86,7 @@ function _render(d,date) {
   const cnNum = n => n <= 10 ? (n === 10 ? '十' : CN[n]) : (n < 20 ? '十' + CN[n - 10] : CN[Math.floor(n / 10)] + '十' + (n % 10 ? CN[n % 10] : ''));
   const h2 = t => `<h2>${cnNum(++sec)}、${t}</h2>`;
   const has = a => Array.isArray(a) && a.length > 0;
+  const showActions = !/\/share\.html$/i.test(location.pathname);
   return `
 <header>
 <div class="kicker">PROPERTY & CASUALTY DAILY BRIEF</div>
@@ -99,6 +100,8 @@ function _render(d,date) {
 <button id="btnStop" class="gray">■ 停止</button>
 <button id="btnPrev" class="gray">⏮ 上一项</button>
 <button id="btnNext" class="gray">下一项 ⏭</button>
+${showActions ? `<button id="btnRefresh" class="gray" title="清空今日缓存并重新生成">↻ 刷新</button>
+<button id="btnShare" class="gray" title="打开分享页面">分享</button>` : ''}
 <button id="credits" class="gray" disabled></button>
 <label>音色
 <select id="voice"><option value="">自动选择</option></select>
@@ -162,12 +165,39 @@ ${d.ending ? `<div class="note" data-tts>${d.ending}</div>` : ''}
 }
 
 function render(DATA,date) {
+  window.__CURRENT_REPORT__ = DATA;
+  window.__CURRENT_REPORT_DATE__ = date;
   document.getElementById('app').innerHTML = _render(DATA, date);
   document.getElementById('credits').style.display = 'none'
   TTSLoader();
+  bindReportActions();
 }
 
 window.render = render;
+
+function bindReportActions() {
+  var refreshBtn = document.getElementById('btnRefresh');
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', function () {
+      if (window.Analyser && window.Analyser.db && window.Analyser.db.clearToday) {
+        refreshBtn.disabled = true;
+        refreshBtn.textContent = '刷新中…';
+        window.Analyser.db.clearToday().finally(function () { location.reload(); });
+      } else {
+        location.reload();
+      }
+    });
+  }
+  var shareBtn = document.getElementById('btnShare');
+  if (shareBtn) {
+    shareBtn.addEventListener('click', function () {
+      var data = window.__CURRENT_REPORT__ || {};
+      var date = window.__CURRENT_REPORT_DATE__ || '';
+      var payload = btoa(encodeURIComponent(JSON.stringify({ data: data, date: date })));
+      location.href = 'share.html?data=' + payload;
+    });
+  }
+}
 
 /* ---------- 三、TTS 朗读（渲染完成后绑定） ---------- */
 function TTSLoader() {
