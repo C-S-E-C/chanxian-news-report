@@ -9,6 +9,37 @@
 </head>
 <body>
 <div class="wrap">
+  <div class="topbar">
+    <button id="openSettings" class="icon-button" type="button" title="设置" aria-label="设置">⚙</button>
+  </div>
+  <dialog id="settingsDialog" class="settings-dialog">
+    <form method="dialog" id="settingsForm">
+      <div class="settings-header"><h2>设置</h2><button class="icon-button" value="cancel" type="submit" title="关闭" aria-label="关闭">×</button></div>
+      <section class="settings-section">
+        <h3>API Key</h3>
+        <label>搜索 provider <select id="settingsSearchProvider"></select></label>
+        <input id="settingsSearchKey" type="password" autocomplete="off" placeholder="API Key">
+        <label>AI provider <select id="settingsAIProvider"></select></label>
+        <input id="settingsAIKey" type="password" autocomplete="off" placeholder="API Key">
+        <button id="saveSettingsKeys" type="button">保存 Key</button>
+      </section>
+      <section class="settings-section">
+        <h3>镜像域名</h3>
+        <label>原始域名 <input id="mirrorSource" placeholder="example.com"></label>
+        <label>镜像域名 <input id="mirrorTarget" placeholder="mirror.example.com"></label>
+        <div class="settings-actions"><button id="saveMirror" type="button">保存镜像</button><button id="clearMirror" class="gray" type="button">清除镜像</button></div>
+        <div id="mirrorList"></div>
+      </section>
+      <section class="settings-section">
+        <h3>缓存与存档</h3>
+        <button id="clearNetworkCache" type="button">清除网络缓存</button>
+        <button id="exportArchive" type="button">导出报告存档</button>
+        <label>导入报告存档 <input id="importArchive" type="file" accept="application/json"></label>
+        <div id="archiveList"></div>
+      </section>
+      <div id="settingsStatus" role="status" aria-live="polite"></div>
+    </form>
+  </dialog>
   <form id="providerConfig" class="provider-config">
     <label>搜索提供商 <select id="searchProvider" name="searchProvider"></select></label>
     <label>AI 提供商 <select id="aiProvider" name="aiProvider"></select></label>
@@ -23,6 +54,7 @@
 <!-- Script Area -->
 <script src="js/app.js"></script> <!-- Main App -->
 <script src="js/statUpdater.js"></script>
+<script src="js/settings.js"></script>
 <script type="module" src="js/provider-config.js"></script>
 </body>
 </html>

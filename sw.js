@@ -1,81 +1,133 @@
-const CACHE_NAME = "cache-v1"; // 建议带版本号
+const CACHE_NAME = "cache-v2";
+const MIRROR_PREFIX = "mirror.";
 
-self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("install", (event) => event.waitUntil(self.skipWaiting()));
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(
-        keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))
-      ))
-      .then(() => self.clients.claim())
+      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))))
+      .then(() => self.clients.claim()),
   );
 });
 
-self.addEventListener("message", (event) => {
-  if (event.data?.type !== "CACHE_URLS") return;
-  const urls = Array.isArray(event.data.urls) ? event.data.urls : [];
+function requestStorage(key, timeout = 1500) {
+  return new Promise(async (resolve) => {
+    const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const client = clients[0];
+    if (!client) return resolve(null);
 
-  event.waitUntil((async () => {
-    const cache = await caches.open(CACHE_NAME);
-    const origin = self.location.origin;
+    const channel = new MessageChannel();
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value ?? null);
+      channel.port1.close();
+    };
+    const timer = setTimeout(() => finish(null), timeout);
+    channel.port1.onmessage = (event) => finish(event.data?.value);
+    client.postMessage({ type: "GET_LOCALSTORAGE", key }, [channel.port2]);
+  });
+}
 
-    // 并发但分批，避免打爆连接
-    const CONCURRENCY = 6;
-    const results = [];
-    for (let i = 0; i < urls.length; i += CONCURRENCY) {
-      const batch = urls.slice(i, i + CONCURRENCY);
-      const batchResults = await Promise.all(batch.map(async (url) => {
-        try {
-          const absolute = new URL(url, self.location.href);
-          const request = new Request(absolute.href, { cache: "reload" });
-          const response = await fetch(request);
+async function getMirrorFor(url) {
+  const source = new URL(url);
+  const mirror = await requestStorage(`${MIRROR_PREFIX}${source.hostname}`);
+  if (!mirror) return null;
+  try {
+    const target = new URL(mirror.includes("://") ? mirror : `${source.protocol}//${mirror}`);
+    target.pathname = source.pathname;
+    target.search = source.search;
+    target.hash = source.hash;
+    return target;
+  } catch {
+    return null;
+  }
+}
 
-          const cacheable =
-            response.type === "opaque" ||
-            (response.ok &&
-              (absolute.origin === origin ||
-               response.type === "basic" ||
-               response.type === "cors"));
-
-          if (!cacheable) {
-            return { url, ok: false, reason: `type=${response.type}, status=${response.status}` };
-          }
-
-          // 关键：用 URL 字符串当 key，保证 fetch 时能匹配
-          await cache.put(absolute.href, response.clone());
-          return { url, ok: true };
-        } catch (e) {
-          return { url, ok: false, reason: String(e) };
+async function cacheUrls(urls) {
+  const cache = await caches.open(CACHE_NAME);
+  const results = [];
+  const concurrency = 6;
+  for (let i = 0; i < urls.length; i += concurrency) {
+    const batch = urls.slice(i, i + concurrency);
+    results.push(...await Promise.all(batch.map(async (url) => {
+      try {
+        const original = new URL(url, self.location.href);
+        const mirror = await getMirrorFor(original.href);
+        const target = mirror || original;
+        const existing = await cache.match(original.href, { ignoreSearch: false });
+        if (existing) return { url, ok: true, cached: true, mirror: mirror?.href || null };
+        const response = await fetch(new Request(target.href, { cache: "default" }));
+        if (!response.ok && response.type !== "opaque") {
+          return { url, ok: false, reason: `status=${response.status}` };
         }
-      }));
-      results.push(...batchResults);
-    }
+        await cache.put(original.href, response.clone());
+        if (mirror) await cache.put(mirror.href, response.clone());
+        return { url, ok: true, mirror: mirror?.href || null };
+      } catch (error) {
+        return { url, ok: false, reason: String(error) };
+      }
+    })));
+  }
+  return results;
+}
 
-    event.ports[0]?.postMessage({ type: "CACHE_RESULT", results });
-  })());
+self.addEventListener("message", (event) => {
+  const data = event.data || {};
+  if (data.type === "CLEAR_CACHE") {
+    const port = event.ports[0];
+    event.waitUntil(caches.delete(CACHE_NAME).then((ok) => {
+      port?.postMessage({ type: "CACHE_CLEARED", ok });
+      port?.close();
+    }));
+    return;
+  }
+  if (data.type === "LIST_CACHE") {
+    const port = event.ports[0];
+    event.waitUntil(caches.open(CACHE_NAME).then(async (cache) => {
+      const keys = await cache.keys();
+      port?.postMessage({ type: "CACHE_LIST", urls: keys.map((request) => request.url) });
+      port?.close();
+    }));
+    return;
+  }
+  if (data.type === "CACHE_URLS") {
+    const port = event.ports[0];
+    event.waitUntil(cacheUrls(Array.isArray(data.urls) ? data.urls : []).then((results) => {
+      port?.postMessage({ type: "CACHE_RESULT", results });
+      port?.close();
+    }));
+  }
 });
 
 self.addEventListener("fetch", (event) => {
-  const req = event.request;
-  if (req.method !== "GET") return;
-
-  // 规范要求
-  if (req.cache === "only-if-cached" && req.mode !== "same-origin") {
-    return;
-  }
-
+  const request = event.request;
+  if (request.method !== "GET" || request.mode === "navigate") return;
+  const cacheableOrigins = [
+    "https://cdn.jsdelivr.net",
+    "https://esm.sh",
+    "https://unpkg.com",
+  ];
+  if (!cacheableOrigins.includes(new URL(request.url).origin)) return;
   event.respondWith((async () => {
-    // 用 URL 字符串匹配，跨域也能命中
-    const cached = await caches.match(req.url, { ignoreSearch: false });
+    const cached = await caches.match(request.url, { ignoreSearch: false });
     if (cached) return cached;
 
+    const mirror = await getMirrorFor(request.url);
+    const target = mirror || new URL(request.url);
     try {
-      return await fetch(req);
+      const response = await fetch(new Request(target.href, request));
+      if (response.ok || response.type === "opaque") {
+        const cache = await caches.open(CACHE_NAME);
+        await cache.put(request.url, response.clone());
+      }
+      return response;
     } catch {
       const offline = await caches.match("/offline.html");
-      if (offline) return offline;
-      return new Response("Offline", { status: 503 });
+      return offline || new Response("Offline", { status: 503 });
     }
   })());
 });

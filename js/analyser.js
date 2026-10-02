@@ -67,6 +67,14 @@ async function idbPut(rec) {
     rq.onerror = () => reject(rq.error);
   });
 }
+async function idbList() {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const rq = db.transaction(STORE, 'readonly').objectStore(STORE).getAll();
+    rq.onsuccess = () => resolve(rq.result || []);
+    rq.onerror = () => reject(rq.error);
+  });
+}
 async function idbDelete(key) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
@@ -482,7 +490,7 @@ export const Analyser = {
   regenerate,
   get generating() { return generationPromise !== null; },
   boot,
-  db: { get: idbGet, put: idbPut, delete: idbDelete, clearToday: () => idbDelete(todayKey()), todayKey }
+  db: { get: idbGet, put: idbPut, list: idbList, delete: idbDelete, clearToday: () => idbDelete(todayKey()), todayKey }
 };
 window.Analyser = Analyser;
 
