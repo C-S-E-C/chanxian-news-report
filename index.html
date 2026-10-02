@@ -5,15 +5,24 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>产险行业晨报</title>
 <link rel="stylesheet" href="css/style.css">
+<script src="js/cacher.js"></script> <!-- Cache API -->
 </head>
 <body>
-<div class="wrap" id="app"></div>
+<div class="wrap">
+  <form id="providerConfig" class="provider-config">
+    <label>搜索提供商 <select id="searchProvider" name="searchProvider"></select></label>
+    <label>AI 提供商 <select id="aiProvider" name="aiProvider"></select></label>
+    <label id="searchKeyField" hidden>搜索 API Key <input id="searchApiKey" type="password" autocomplete="off" placeholder="Firecrawl API Key"></label>
+    <label id="aiKeyField" hidden>AI API Key <input id="aiApiKey" type="password" autocomplete="off" placeholder="API Key"></label>
+    <button type="submit">生成报告</button>
+    <p style="width: 100%;"></p>
+    <div id="configStatus" role="status" aria-live="polite"></div>
+  </form>
+  <div id="app"></div>
+</div>
 <!-- Script Area -->
 <script src="js/app.js"></script> <!-- Main App -->
-<script src="js/search.js"></script> <!-- Search API -->
-<script type="module" src="js/analyser.js"></script> <!-- AI Analyser -->
-<script src="js/g4f-cors-shim.js"></script> <!-- g4f.space CORS 兜底 -->
-<script src="js/g4f-quiet.js"></script> <!-- 静默 hashing 刷屏，保留 baked 等关键日志 -->
-<script type="module" src="https://g4f.dev/dist/js/cake-baker.js" defer></script> <!-- AI Analyser Credit System -->
+<script src="js/statUpdater.js"></script>
+<script type="module" src="js/provider-config.js"></script>
 </body>
 </html>

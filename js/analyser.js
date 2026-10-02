@@ -9,9 +9,6 @@
  *              实时把内容写进页面；全部添加完后回复 {"done":true}，
  *              之后不再调用 AI。
  * ============================================================ */
-import Client from 'https://g4f.dev/dist/js/client.js';
-
-const client = new Client();
 
 /* ---------- 内置兜底报告内容（AI 未产出前的占位，也是各字段的缺省值） ---------- */
 /* ---------- 兜底数据：全部为空，页面完全由 AI 输出实时构建 ---------- */
@@ -25,13 +22,15 @@ var DEFAULT_DATA = {
   watch: [],
   ending : '',
   sources: '',
-  note   : '本报告由 WorkBuddy 基于公开信息自动整理生成，不构成投资建议。'
+  note   : `本报告由 ${ai.current.provider} 基于 ${search.current.provider} 自动整理生成，不构成投资建议。`
 };
 
 /* ---------- 基础设施：日期与 IndexedDB ---------- */
-const DB_NAME = 'chanxian-report', STORE = 'snapshots';
-const search = new SearchEngine();          // 来自 js/search.js
-let headlineCache = null;
+const DB_NAME = 'chanxian-report', STORE = 'snapshots', SEARCH_STORE = 'searchResults';
+let headlineCache = null, headlineCacheKey = null;
+
+const postStatus = (value, color = 'var(--amber)') =>
+    window.channels.statUpdater.postMessage({ name: '编辑', value, color, exp: -1 });
 
 function todayKey() {
   const t = new Date();
@@ -43,8 +42,11 @@ function fmtDateCN(t) {
 }
 function openDB() {
   return new Promise((resolve, reject) => {
-    const rq = indexedDB.open(DB_NAME, 1);
-    rq.onupgradeneeded = () => { rq.result.createObjectStore(STORE, { keyPath: 'date' }); };
+    const rq = indexedDB.open(DB_NAME, 2);
+    rq.onupgradeneeded = () => {
+      if (!rq.result.objectStoreNames.contains(STORE)) rq.result.createObjectStore(STORE, { keyPath: 'date' });
+      if (!rq.result.objectStoreNames.contains(SEARCH_STORE)) rq.result.createObjectStore(SEARCH_STORE, { keyPath: 'key' });
+    };
     rq.onsuccess = () => resolve(rq.result);
     rq.onerror = () => reject(rq.error);
   });
@@ -68,13 +70,57 @@ async function idbPut(rec) {
 async function idbDelete(key) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
-    const rq = db.transaction(STORE, 'readwrite').objectStore(STORE).delete(key);
-    rq.onsuccess = () => resolve(true);
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).delete(key);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+}
+function searchCacheKey(type, url = '') {
+  return JSON.stringify([todayKey(), search.current.provider, type, url]);
+}
+
+async function searchCacheGet(key) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const rq = db.transaction(SEARCH_STORE, 'readonly').objectStore(SEARCH_STORE).get(key);
+    rq.onsuccess = () => resolve(rq.result);
     rq.onerror = () => reject(rq.error);
   });
 }
+
+async function searchCachePut(key, value) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const rq = db.transaction(SEARCH_STORE, 'readwrite').objectStore(SEARCH_STORE).put({ key, value });
+    rq.onsuccess = () => resolve(value);
+    rq.onerror = () => reject(rq.error);
+  });
+}
+
+async function cachedSearch(type, url, fetchResult) {
+  const key = searchCacheKey(type, url);
+  try {
+    const cached = await searchCacheGet(key);
+    if (cached) return cached.value;
+  } catch (e) {
+    console.warn('[Analyser] 搜索缓存读取失败：', e);
+  }
+  const result = await fetchResult();
+  if (result != null) {
+    try { await searchCachePut(key, result); }
+    catch (e) { console.warn('[Analyser] 搜索缓存写入失败：', e); }
+  }
+  return result;
+}
+
 async function getList() {
-  if (!headlineCache) headlineCache = await search.getNews();
+  const key = searchCacheKey('news');
+  if (headlineCacheKey !== key) {
+    headlineCache = await cachedSearch('news', '', () => search.getNews());
+    headlineCacheKey = key;
+  }
   return headlineCache;
 }
 
@@ -101,7 +147,7 @@ async function tViewNews(args) {
     url = item.href; head = item;
   }
   if (!head) head = list.filter(x => x.href === url)[0] || {};
-  const c = await search.getContent(url);   // 目前支持人民网正文
+  const c = await cachedSearch('content', url, () => search.getContent(url));
   if (!c) return { url, headline: head.text || '', from: head.from || '', detail: null, hint: '该链接暂只支持人民网正文抓取' };
   c.url = url; c.headline = head.text || '';
   return c;
@@ -113,19 +159,57 @@ function mergeReport(data) {
 }
 let currentReport = null;                   // 当前已合并的报告状态（供 AI 分批填充累积）
 async function tFillTemplate(args) {
-  currentReport = Object.assign({}, currentReport || DEFAULT_DATA, args.data || {});
+  const data = args.data || {};
+  currentReport ||= Object.assign({}, DEFAULT_DATA);
   const ds = args.date || fmtDateCN(new Date());
-  window.render(currentReport, ds);         // ① 实时渲染进页面
+  const arrayFields = new Set(['kpis', 'news', 'companies', 'watch', 'charts']);
+  let rendered = 0;
+
+  for (const [field, value] of Object.entries(data)) {
+    if (!Object.hasOwn(DEFAULT_DATA, field)) continue;
+    if (arrayFields.has(field)) {
+      if (!Array.isArray(value)) continue;
+      for (const item of value) {
+        const existing = currentReport[field];
+        const duplicate = field === 'news'
+          ? existing.some(news => news.title === item?.title && news.src === item?.src)
+          : existing.some(entry => JSON.stringify(entry) === JSON.stringify(item));
+        if (duplicate) continue;
+        currentReport = { ...currentReport, [field]: [...existing, item] };
+        window.render(currentReport, ds);
+        rendered++;
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+    } else if (value != null && value !== currentReport[field]) {
+      currentReport = { ...currentReport, [field]: value };
+      window.render(currentReport, ds);
+      rendered++;
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+  }
   return {
     ok: true,
+    updated: rendered,
     saved: false,
-    reason: '实时渲染完成；等待 AI 回复 {"done":true} 后再写入 IndexedDB',
+    reason: '逐项渲染完成；等待 AI 回复 {"done":true} 后再写入 IndexedDB',
     counts: { kpis: currentReport.kpis.length, news: currentReport.news.length, charts: currentReport.charts.length, companies: currentReport.companies.length, watch: currentReport.watch.length }
   };
 }
 
+function reportIssues(data) {
+  const issues = [];
+  if (!data || typeof data.intro !== 'string' || !data.intro.trim()) issues.push('今日导读');
+  if (!Array.isArray(data?.news) || !data.news.some(item =>
+    typeof item?.title === 'string' && item.title.trim() &&
+    typeof item?.text === 'string' && item.text.trim() &&
+    typeof item?.src === 'string' && item.src.trim())) {
+    issues.push('至少一条有标题、摘要和来源的新闻');
+  }
+  return issues;
+}
+
 async function saveCompletedReport(source) {
-  if (!currentReport) return null;
+  if (reportIssues(currentReport).length) return null;
   const rec = {
     date: todayKey(),
     datestr: window.__CURRENT_REPORT_DATE__ || fmtDateCN(new Date()),
@@ -161,16 +245,12 @@ async function callTool(name, args) {
  * ============================================================ */
 const SYSTEM_PROMPT = `你是《产险行业晨报》的自动编辑，负责把今天的新闻整理成晨报并实时写入网页。
 
-【输出格式硬性要求】每次回复只能是"一行 JSON"，必须以 { 开头、以 } 结尾。
-禁止使用 <tool_call> 标签、markdown 代码块以外的解释文字、或空回复。
-推荐直接写纯 JSON（不要包 \`\`\` 代码块）。
-
-你可以通过输出 JSON 来调用工具：
-① 查看某条新闻正文：
-{"actions":[{"tool":"view_news","args":{"index":0}}]}
-② 把内容填充进晨报（立即渲染到页面，可分多次调用、每次填一部分）：
-{"actions":[{"tool":"fill_template","args":{"data":{ ... }}}]}
-③ 全部添加完毕后，回复：{"done":true}
+每次只回复一个完整 JSON 对象，不要多个对象、代码块、XML 或解释文字。每轮只做一件事：
+查看正文：{"tool":"view_news","index":0}
+填充报告：{"tool":"fill_template","data":{"intro":"今日导读"}}
+新闻单独填充：{"tool":"fill_template","data":{"news":[{"chip":"data","tag":"数据","color":"--accent","title":"新闻标题","text":"已核对正文的摘要","src":"来源名称"}]}}
+全部完成：{"done":true}（至少已有导读和一条带标题、摘要、来源的新闻）
+严格使用英文双引号，JSON 字符串内部不要出现未转义的双引号；每次只提交一个字段或一条新闻，不要重复提交整个报告，也不要输出空 news。查看正文后等待工具结果，再单独填充报告。禁止在同一回复中同时输出工具调用和 done。
 
 fill_template 可用字段：
 - intro：今日导读，一段话
@@ -186,78 +266,28 @@ fill_template 可用字段：
 - ending、sources、note：结尾语 / 数据来源 / 免责声明
 
 工作要求：
-1. 第一批 fill_template 必须包含全新的 kpis（从今日新闻里提炼的4~5个关键指标或看点），禁止照抄页面上的占位数据；
+1. 有可靠数据时逐个提交 kpis；没有可靠数据就跳过，不编造数字或照抄示例；
 2. 从新闻列表里挑出与财产险、保险业、金融监管相关的条目（最多6条，宁缺毋滥），重要条目先用 view_news 阅读正文再提炼摘要；
-3. 分批调用 fill_template（如：第一批 intro+kpis → 第二批 news → 第三批 companies+watch+ending+sources），每批都会实时显示在页面上；
+3. 分批调用 fill_template，每轮只写一个字段或一条新闻；已有字段不需要重发，每个数组项都会独立上屏；
 4. 页面各区块只显示你提交过的内容——某区块未提交前不会出现在页面上，请按批次逐步提交实现实时更新；
 5. 所有内容都添加完后，必须回复 {"done":true} 结束工作。`;
 
-function extractJSON(text) {
-  if (!text) return null;
-  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const raw = fence ? fence[1] : text;
-  const candidates = ['{', '['];
-  let start = Infinity;
-  for (const c of candidates) { const i = raw.indexOf(c); if (i !== -1 && i < start) start = i; }
-  if (start === Infinity) return null;
-  const close = raw[start] === '{' ? '}' : ']';
-  const end = raw.lastIndexOf(close);
-  if (end <= start) return null;
-  try { return JSON.parse(raw.slice(start, end + 1)); } catch (e) { return null; }
-}
-
-/* 兼容 <tool_call> 风格的工具调用（部分本地模型的原生格式）：
- *   变体A：<tool_call>view_news<arg_key>index</arg_key><arg_value>11</arg_value></tool_call>
- *   变体B：<tool_call>{"name":"view_news","arguments":{"index":11}}</tool_call> */
-function parseToolCallXML(text) {
-  const out = [];
-  const re = /<tool_call>([\s\S]*?)<\/tool_call>/g;
-  let m;
-  while ((m = re.exec(text)) !== null) {
-    const body = m[1].trim();
-    if (body.startsWith('{')) {                      // 变体B
-      try {
-        const j = JSON.parse(body);
-        const nm = j.name || j.tool;
-        if (nm) out.push({ tool: nm, args: j.arguments || j.args || {} });
-        continue;
-      } catch (e) { /* 落回变体A解析 */ }
-    }
-    const nameM = body.match(/^([a-zA-Z_][\w]*)/);   // 变体A
-    if (!nameM) continue;
-    const act = { tool: nameM[1], args: {} };
-    const pairs = body.match(/<arg_key>[\s\S]*?<\/arg_key>\s*<arg_value>[\s\S]*?<\/arg_value>/g) || [];
-    for (const pair of pairs) {
-      const k = pair.match(/<arg_key>([\s\S]*?)<\/arg_key>/)[1].trim();
-      let v = pair.match(/<arg_value>([\s\S]*?)<\/arg_value>/)[1].trim();
-      try { v = JSON.parse(v); } catch (e) { /* 保留字符串 */ }
-      act.args[k] = v;
-    }
-    out.push(act);
-  }
-  return out.length ? { actions: out } : null;
-}
-
-/* 统一入口：把各种回复格式归一化为 {done?, actions:[{tool,args}]} */
 function parseAgentReply(text) {
-  if (!text || !text.trim()) return null;
-  let parsed = null;
-  if (text.includes('<tool_call>')) parsed = parseToolCallXML(text);   // XML 风格优先按工具调用解读
-  if (!parsed) parsed = extractJSON(text);
-  if (!parsed) return null;
-  if (parsed.done) return { done: true, actions: [] };
-  /* 单个动作对象 {"name"/"tool", "arguments"/"args"} 也算一次调用 */
-  if (!Array.isArray(parsed) && !parsed.actions && (parsed.name || parsed.tool)) {
-    parsed = { actions: [parsed] };
+  let reply;
+  try { reply = JSON.parse(text); } catch (e) { return null; }
+  if (!reply || typeof reply !== 'object' || Array.isArray(reply)) return null;
+  if (reply.done === true && !reply.tool) return { done: true };
+  if (reply.done || reply.actions || typeof reply.tool !== 'string') return null;
+  if (reply.tool === 'view_news' &&
+      (typeof reply.index === 'number' && Number.isInteger(reply.index) && reply.index >= 0 ||
+       typeof reply.url === 'string' && reply.url)) {
+    return { tool: 'view_news', args: { index: reply.index, url: reply.url } };
   }
-  let acts = Array.isArray(parsed) ? parsed : (parsed.actions || []);
-  acts = acts.map(a => {
-    if (!a || typeof a !== 'object') return null;
-    const tool = a.tool || a.name;
-    if (!tool) return null;
-    return { tool, args: a.args || a.arguments || {} };
-  }).filter(Boolean);
-  return { done: false, actions: acts };
+  if (reply.tool === 'fill_template' && reply.data && typeof reply.data === 'object' &&
+      !Array.isArray(reply.data) && Object.keys(reply.data).length) {
+    return { tool: 'fill_template', args: { data: reply.data } };
+  }
+  return null;
 }
 
 async function runEditorAgent() {
@@ -269,57 +299,114 @@ async function runEditorAgent() {
   ];
   // 一直循环回喂工具结果，直到 AI 回复 {"done":true}；
   // 仅当连续多轮无法解析时才保护性中止，避免故障模型死循环刷接口。
-  let consecutiveFailures = 0, round = 0;
-  while (true) {
+  let consecutiveFailures = 0, stalledRounds = 0, round = 0;
+  let completed = false;
+  let lastCommand = '', repeats = 0;
+  const viewed = new Set();
+  while (round < 30) {
     round++;
-    const res = await client.chat.completions.create({ model: 'glm-5-2', messages });
+    const res = await ai.completions.create({ messages });
     const text = res.choices?.[0]?.message?.content || '';
-    console.log('[Analyser][AI] 第' + round + '轮输出：', String(text).slice(0, 200));
+    console.log('[Analyser][AI] 第' + round + '轮输出：', String(text));
+    postStatus(`AI第 ${round} 轮输出：${String(text).slice(0, 60)}${String(text).length > 60 ? '…' : ''}`);
     const parsed = parseAgentReply(text);
-    messages.push({ role: 'assistant', content: text });
     if (!parsed) {
+      console.warn('[Analyser][AI] 回复不是完整 JSON，finish_reason=' + (res.choices?.[0]?.finish_reason || 'unknown'));
       consecutiveFailures++;
-      if (consecutiveFailures >= 10) { console.warn('[Analyser][AI] 连续10轮无法解析，保护性停止（已渲染内容保留）。'); break; }
-      messages.push({ role: 'user', content: text.trim()
-        ? '无法解析。请只输出一行 JSON：工具调用 {"actions":[{"tool":"view_news","args":{"index":0}}]} 或 {"tool":"fill_template","args":{"data":{...}}}，完成后回复 {"done":true}。不要使用 <tool_call> 等其它格式。'
-        : '（上一轮回复为空）请只输出 JSON：工具调用 {"actions":[...]} 或完成时回复 {"done":true}。' });
+      stalledRounds++;
+      if (consecutiveFailures >= 4 || stalledRounds >= 8) { console.warn('[Analyser][AI] 多轮无有效进展，停止生成（未完成内容不保存）。'); postStatus('输出格式连续错误，已停止，未保存', 'var(--red)'); break; }
+      messages.push({ role: 'user', content: currentReport?.intro
+        ? '上一条 JSON 格式错误，已忽略。下一轮只提交一条简短新闻：{"tool":"fill_template","data":{"news":[{"title":"标题","text":"摘要","src":"来源"}]}}。不要重发整个报告。'
+        : '上一条 JSON 格式错误，已忽略。下一轮只提交导读：{"tool":"fill_template","data":{"intro":"今日保险动态"}}。不要重发整个报告。' });
       continue;
     }
+    messages.push({ role: 'assistant', content: text });
     if (parsed.done) {
+      const missing = reportIssues(currentReport);
+      if (missing.length) {
+        consecutiveFailures++;
+        stalledRounds++;
+        if (consecutiveFailures >= 4 || stalledRounds >= 8) break;
+        messages.push({ role: 'user', content: '报告尚未完成，缺少：' + missing.join('、') + '。请先调用 fill_template 补充，再回复 {"done":true}。' });
+        continue;
+      }
       try {
         const rec = await saveCompletedReport('ai-complete');
-        if (rec) console.log('[Analyser][AI] 报告完成，已写入 IndexedDB：' + rec.date + '，共 ' + round + ' 轮。');
+        if (rec) {
+          completed = true;
+          console.log('[Analyser][AI] 报告完成，已写入 IndexedDB：' + rec.date + '，共 ' + round + ' 轮。');
+        }
       } catch (e) {
         console.warn('[Analyser][AI] 报告完成，但 IndexedDB 写入失败：', e);
       }
       console.log('[Analyser][AI] 报告完成，AI 下班。共 ' + round + ' 轮。');
+      if (completed) postStatus('报告已完成', 'var(--teal)');
       break;
     }
-    const actions = parsed.actions;
-    if (!actions.length) {
+    const command = JSON.stringify(parsed);
+    repeats = command === lastCommand ? repeats + 1 : 0;
+    lastCommand = command;
+    if (repeats >= 3) {
       consecutiveFailures++;
-      if (consecutiveFailures >= 10) { console.warn('[Analyser][AI] 连续10轮无有效动作，保护性停止。'); break; }
-      messages.push({ role: 'user', content: '没有可执行的动作，请调用工具或回复 {"done":true}。' });
+      stalledRounds++;
+      if (consecutiveFailures >= 4 || stalledRounds >= 8) break;
+      messages.push({ role: 'user', content: '请不要重复同一命令。请读取不同新闻、填充新内容，或在完成后回复 {"done":true}。' });
       continue;
     }
-    consecutiveFailures = 0;
-    for (const act of actions) {
-      if (!act || !act.tool) continue;
-      try {
-        if (act.tool === 'fill_template') {
-          const r = await tFillTemplate({ data: act.args?.data || {}, source: 'ai' });   // 实时上屏+备份
-          messages.push({ role: 'user', content: '工具结果 fill_template：' + JSON.stringify(r) });
-        } else if (act.tool === 'view_news') {
-          const r = await tViewNews(act.args || {});
-          messages.push({ role: 'user', content: '工具结果 view_news：\n' + JSON.stringify(r).slice(0, 4000) });
-        } else {
-          messages.push({ role: 'user', content: '未知工具：' + act.tool });
+    try {
+      if (parsed.tool === 'view_news') {
+        const key = parsed.args.url || String(parsed.args.index);
+        if (viewed.has(key)) {
+          stalledRounds++;
+          messages.push({ role: 'user', content: '这条新闻已经读过。请从已读正文写出带标题、摘要、来源的 news，调用 fill_template。' });
+          if (stalledRounds >= 8) break;
+          continue;
         }
-      } catch (e) {
-        messages.push({ role: 'user', content: '工具执行出错：' + String(e && e.message || e) });
+        viewed.add(key);
       }
+      const result = await callTool(parsed.tool, parsed.args);
+      messages.push({ role: 'user', content: '工具结果 ' + parsed.tool + '：' + JSON.stringify(result).slice(0, 4000) });
+      if (parsed.tool === 'fill_template' && !reportIssues(currentReport).length) {
+        consecutiveFailures = 0;
+        stalledRounds = 0;
+      } else {
+        stalledRounds++;
+        if (stalledRounds >= 8) { console.warn('[Analyser][AI] 8轮未写出完整新闻，停止生成。'); break; }
+      }
+    } catch (e) {
+      consecutiveFailures++;
+      stalledRounds++;
+      if (consecutiveFailures >= 4 || stalledRounds >= 8) { console.warn('[Analyser][AI] 多轮工具执行失败，停止生成。'); break; }
+      messages.push({ role: 'user', content: '工具执行出错：' + String(e && e.message || e) });
     }
   }
+  if (round >= 30 && !completed) console.warn('[Analyser][AI] 已达到30轮上限，未完成内容不写入 IndexedDB。');
+  if (!completed) postStatus('生成未完成，未保存', 'var(--red)');
+  return completed;
+}
+
+let generationPromise = null;
+async function regenerate() {
+  if (generationPromise) return generationPromise;
+  generationPromise = (async () => {
+    await idbDelete(todayKey());
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      currentReport = Object.assign({}, DEFAULT_DATA);
+      window.render(currentReport, fmtDateCN(new Date()));
+      postStatus(`正在生成报告（第 ${attempt} 次尝试）`);
+      try {
+        if (await runEditorAgent()) return true;
+      } catch (e) {
+        console.warn('[Analyser] AI 编辑中断（未完成内容不保存）：', e);
+        postStatus('生成中断：' + String(e && e.message || e), 'var(--red)');
+      }
+      if (attempt < 2) postStatus('生成失败，清空对话后重试');
+    }
+    postStatus('两次尝试均未完成，未保存', 'var(--red)');
+    return false;
+  })();
+  try { return await generationPromise; }
+  finally { generationPromise = null; }
 }
 
 /* ---------- 启动：当天有 AI/手动产出过的快照直接用（不调AI）；否则兜底渲染后让 AI 干活 ---------- */
@@ -328,26 +415,19 @@ async function boot() {
   try {
     const s = await idbGet(key);
     // 只有已完成的快照才算命中；AI 分批生成中的半成品一律视为未命中
-    if (s && s.data && s.complete === true) {
+    if (s && s.data && s.complete === true && !reportIssues(s.data).length) {
       currentReport = s.data;
       window.render(s.data, s.datestr || fmtDateCN(new Date()));
       console.log('[Analyser] 命中 IndexedDB 当天快照（' + key + '），savedAt=' + s.savedAt + '，无需 AI。');
+      postStatus('命中快照，无需 AI', 'var(--teal)');
       return { source: 'indexeddb', date: s.date };
     }
   } catch (e) {
     console.warn('[Analyser] IndexedDB 读取失败：', e);
   }
-  // 未命中：只渲染兜底内容，【不写入 IndexedDB】——AI 没产出结果前不能占用当天缓存，
-  // 否则下次进入会命中假快照导致 AI 永远不会再运行。
-  currentReport = Object.assign({}, DEFAULT_DATA);
-  window.render(currentReport, fmtDateCN(new Date()));
-  // 让 AI 接手，实时逐块填充真实内容；只有最终 done 后才写入 IndexedDB
-  runEditorAgent().catch(e => {
-    const msg = String(e && e.message || e);
-    const m = msg.match(/Status 402:[\s\S]*/i);
-    if (m && window.showCreditWarning) {
-      window.showCreditWarning('⚠ Credit 402：Cake credit budget exceeded', m[0]);
-    }
+  // 未命中：保留搜索缓存，失败时最多从空对话重试一次。
+  regenerate().catch(e => {
+    postStatus('生成中断，未保存：' + String(e && e.message || e), 'var(--red)');
     console.warn('[Analyser] AI 编辑中断（未完成内容不写入 IndexedDB）：', e);
   });
   return { source: 'default+ai', date: key };
@@ -399,10 +479,13 @@ export const Analyser = {
         try { return JSON.parse(text); } catch (e) { return text; }
       }),
   runEditorAgent,
+  regenerate,
+  get generating() { return generationPromise !== null; },
   boot,
   db: { get: idbGet, put: idbPut, delete: idbDelete, clearToday: () => idbDelete(todayKey()), todayKey }
 };
 window.Analyser = Analyser;
 
 console.log('[Analyser] 就绪：await Analyser.callTool(toolName, args)；AI 编辑随启动自动运行（仅当天无缓存时）。');
+postStatus('正在等待 AI 响应', 'var(--amber)');
 boot();

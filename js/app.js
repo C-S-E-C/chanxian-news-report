@@ -100,7 +100,7 @@ function _render(d,date) {
 <button id="btnStop" class="gray">■ 停止</button>
 <button id="btnPrev" class="gray">⏮ 上一项</button>
 <button id="btnNext" class="gray">下一项 ⏭</button>
-${showActions ? `<button id="btnRefresh" class="gray" title="清空今日缓存并重新生成">↻ 刷新</button>
+${showActions ? `<button id="btnRefresh" class="gray" title="清除今日报告并重新生成；保留搜索结果缓存">↻ 重新生成</button>
 <button id="btnShare" class="gray" title="打开分享页面">分享</button>` : ''}
 <button id="credits" class="gray" disabled></button>
 <label>音色
@@ -114,7 +114,6 @@ ${showActions ? `<button id="btnRefresh" class="gray" title="清空今日缓存�
 <option value="1.5">1.5×</option>
 </select>
 </label>
-<span id="status">加载中…</span>
 </div>
 
 ${(has(d.kpis) || d.intro) ? `
@@ -193,11 +192,23 @@ function bytesToBase64Url(bytes) {
 function bindReportActions() {
   var refreshBtn = document.getElementById('btnRefresh');
   if (refreshBtn) {
+    if (window.Analyser && window.Analyser.generating) {
+      refreshBtn.disabled = true;
+      refreshBtn.textContent = '生成中…';
+    }
     refreshBtn.addEventListener('click', function () {
-      if (window.Analyser && window.Analyser.db && window.Analyser.db.clearToday) {
+      if (window.Analyser && window.Analyser.regenerate) {
         refreshBtn.disabled = true;
-        refreshBtn.textContent = '刷新中…';
-        window.Analyser.db.clearToday().finally(function () { location.reload(); });
+        refreshBtn.textContent = '生成中…';
+        window.Analyser.regenerate().catch(function (error) {
+          window.channels.statUpdater.postMessage({ name: '编辑', value: '重新生成失败：' + String(error), color: 'var(--red)', exp: -1 });
+        }).finally(function () {
+          var currentBtn = document.getElementById('btnRefresh');
+          if (currentBtn) {
+            currentBtn.disabled = false;
+            currentBtn.textContent = '↻ 重新生成';
+          }
+        });
       } else {
         location.reload();
       }
@@ -241,15 +252,17 @@ function TTSLoader() {
   var parts = Array.prototype.slice.call(document.querySelectorAll('[data-tts]'));
   var playBtn = document.getElementById('btnPlay'), pauseBtn = document.getElementById('btnPause'), stopBtn = document.getElementById('btnStop');
   var prevBtn = document.getElementById('btnPrev'), nextBtn = document.getElementById('btnNext');
-  var rateSel = document.getElementById('rate'), voiceSel = document.getElementById('voice'), statusEl = document.getElementById('status');
+  var rateSel = document.getElementById('rate'), voiceSel = document.getElementById('voice');
   var cur = -1, stopped = true, paused = false, gen = 0;
   var voices = [], voiceTouched = false;
 
   var totalChars = parts.reduce(function (s, p) { return s + p.innerText.length; }, 0);
   var mins = Math.max(1, Math.round(totalChars / 280));
-  statusEl.textContent = '共 ' + parts.length + ' 段 · 预计 ' + mins + ' 分钟，点击"播放"开始收听';
+  setStatus('共 ' + parts.length + ' 段 · 预计 ' + mins + ' 分钟');
 
-  function setStatus(t) { statusEl.textContent = t; }
+  function setStatus(t) {
+    window.channels.statUpdater.postMessage({ name: '朗读', value: t, exp: -1 });
+  }
   function highlight(i) {
     parts.forEach(function (p, idx) { p.classList.toggle('reading', idx === i); });
     if (parts[i] && parts[i].scrollIntoView) { try { parts[i].scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) { } }
